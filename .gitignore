@@ -1,0 +1,58 @@
+# Biến môi trường (chứa API keys và webhooks)
+.env
+
+# File trạng thái
+seen_laws.json
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environment
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+logs.txt
+
+# Chrome driver files
+chromedriver.exe
+chromedriver
+
+# Temporary files
+*.tmp
+temp/
+
+# OS generated files
+.DS_Store
+Thumbs.db
