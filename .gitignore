@@ -2,7 +2,11 @@
 .env
 
 # File trạng thái
-seen_laws.json
+phase1-monitor/seen_laws.json
+phase2-chatbot/processor_seen_laws.json
+
+# Vector database
+database/
 
 # Python cache
 __pycache__/
@@ -52,6 +56,9 @@ chromedriver
 # Temporary files
 *.tmp
 temp/
+
+# Local processing cache (phase2)
+phase2-chatbot/.local_cache/
 
 # OS generated files
 .DS_Store
