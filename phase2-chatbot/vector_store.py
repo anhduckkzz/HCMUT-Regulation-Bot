@@ -3,7 +3,7 @@ import os
 from typing import Any, Dict, List, Optional, Set
 
 import chromadb
-import google.generativeai as genai
+from sentence_transformers import SentenceTransformer
 from dotenv import load_dotenv
 
 from document_processor import DocumentProcessor, process_documents_for_vector_store
@@ -16,14 +16,7 @@ class VectorStoreManager:
 	"""Embed processed regulation chunks and persist them in ChromaDB."""
 
 	def __init__(self) -> None:
-		self.gemini_api_key = os.getenv("GEMINI_API_KEY")
-		if not self.gemini_api_key:
-			raise ValueError("Missing GEMINI_API_KEY in .env")
-
-		genai.configure(api_key=self.gemini_api_key)
-
-		self.embedding_model = os.getenv("EMBEDDING_MODEL", "gemini-embedding-001")
-		self.embedding_task_type = os.getenv("EMBEDDING_TASK_TYPE", "retrieval_document")
+		self.embedding_model_name = os.getenv("EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")
 		self.embedding_retry_count = int(os.getenv("EMBEDDING_RETRY_COUNT", "3"))
 		self.embedding_retry_delay = float(os.getenv("EMBEDDING_RETRY_DELAY", "1.5"))
 		self.verbose_logs = os.getenv("VERBOSE_LOGS", "true").lower() == "true"
@@ -34,6 +27,10 @@ class VectorStoreManager:
 		)
 		self.collection_name = os.getenv("VECTOR_COLLECTION_NAME", "hcmut_regulations")
 		self.upsert_batch_size = int(os.getenv("UPSERT_BATCH_SIZE", "32"))
+
+		# Initialize HuggingFace embedding model
+		self._log(f"Loading embedding model: {self.embedding_model_name}")
+		self.embedding_model = SentenceTransformer(self.embedding_model_name)
 
 		self.client = chromadb.PersistentClient(path=self.persist_directory)
 		self.collection = self.client.get_or_create_collection(name=self.collection_name)
@@ -55,20 +52,15 @@ class VectorStoreManager:
 			return set()
 
 	def _embed_text(self, text: str) -> List[float]:
-		"""Create one embedding vector using Gemini Text Embeddings."""
+		"""Create one embedding vector using HuggingFace sentence-transformers."""
 		last_error: Optional[Exception] = None
 
 		for attempt in range(1, self.embedding_retry_count + 1):
 			try:
-				response = genai.embed_content(
-					model=self.embedding_model,
-					content=text,
-					task_type=self.embedding_task_type,
-				)
-				embedding = response.get("embedding", [])
-				if not embedding:
-					raise ValueError("Gemini returned empty embedding.")
-				return embedding
+				embedding = self.embedding_model.encode(text, convert_to_tensor=False)
+				if embedding is None or len(embedding) == 0:
+					raise ValueError("Embedding model returned empty embedding.")
+				return embedding.tolist() if hasattr(embedding, 'tolist') else list(embedding)
 			except Exception as exc:
 				last_error = exc
 				self._log(f"Embedding attempt {attempt}/{self.embedding_retry_count} failed: {exc}")

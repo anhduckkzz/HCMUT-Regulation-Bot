@@ -61,7 +61,7 @@ def inspect_collection(
         return
     
     # Get all records (with limit)
-    limit = max_records or 10
+    limit = max_records if max_records is not None else total_count
     results = collection.get(
         limit=limit,
         include=["documents", "metadatas"]

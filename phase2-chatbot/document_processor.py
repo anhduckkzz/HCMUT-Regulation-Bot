@@ -8,7 +8,6 @@ import argparse
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-import google.generativeai as genai
 import fitz
 import requests
 from dotenv import load_dotenv
@@ -69,30 +68,13 @@ class DocumentProcessor:
 		self.chunk_size = int(os.getenv("CHUNK_SIZE", "1200"))
 		self.chunk_overlap = int(os.getenv("CHUNK_OVERLAP", "200"))
 
-		self.main_model_name = os.getenv("MAIN_MODEL", "gemini-3-flash-preview")
-		self.fallback_model_name = os.getenv("FALLBACK_MODEL", "gemini-2.5-flash")
-		self.pdf_extract_prompt = os.getenv(
-			"PDF_EXTRACT_PROMPT",
-			(
-				"You are extracting university regulation PDFs for RAG indexing. "
-				"Return full plain text in Vietnamese, keep section titles and appendix labels, "
-				"and remove only decorative repetition (headers/footers/page numbers)."
-			),
-		)
-		self.extraction_mode = os.getenv("EXTRACTION_MODE", "hybrid").lower()
+		self.extraction_mode = os.getenv("EXTRACTION_MODE", "pymupdf_only").lower()
 		self.pymupdf_threshold = float(os.getenv("PYMUPDF_QUALITY_THRESHOLD", "0.75"))
 		self.expected_min_chars = int(os.getenv("EXPECTED_MIN_CHARS", "1000"))
 		self.expected_min_chunks = int(os.getenv("EXPECTED_MIN_CHUNKS", "2"))
 
-		self.gemini_api_key = os.getenv("GEMINI_API_KEY")
 		self.verbose_logs = os.getenv("VERBOSE_LOGS", "true").lower() == "true"
-		self.main_model = None
-		self.fallback_model = None
 		self._cache_index: Optional[Dict[str, List[Dict[str, Any]]]] = None
-		if self.gemini_api_key:
-			genai.configure(api_key=self.gemini_api_key)
-			self.main_model = genai.GenerativeModel(self.main_model_name)
-			self.fallback_model = genai.GenerativeModel(self.fallback_model_name)
 
 		if self.cache_enabled:
 			os.makedirs(os.path.dirname(self.cache_file), exist_ok=True)
@@ -377,37 +359,6 @@ class DocumentProcessor:
 			self._log(f"Download error: {exc}")
 			return None
 
-	def _extract_text_with_gemini(self, pdf_bytes: bytes, title: str) -> str:
-		if not self.main_model or not self.fallback_model:
-			raise ValueError("Missing GEMINI_API_KEY. Cannot preprocess PDF text for vector indexing.")
-
-		with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_file:
-			temp_file.write(pdf_bytes)
-			temp_path = temp_file.name
-
-		try:
-			self._log(f"Uploading PDF to Gemini for text extraction: {title}")
-			uploaded_doc = genai.upload_file(path=temp_path, mime_type="application/pdf")
-			instruction = (
-				f"{self.pdf_extract_prompt}\n"
-				f"Document title: {title}\n"
-				"Output only extracted text, no explanations."
-			)
-			try:
-				self._log(f"Extracting text with main model: {self.main_model_name}")
-				response = self.main_model.generate_content([instruction, uploaded_doc])
-			except Exception as exc:
-				self._log(f"Main model failed ({exc}), retrying with {self.fallback_model_name}")
-				response = self.fallback_model.generate_content([instruction, uploaded_doc])
-
-			text = (response.text or "").strip()
-			self._log(f"Text extraction complete ({len(text)} chars).")
-			genai.delete_file(uploaded_doc.name)
-			return text
-		finally:
-			if os.path.exists(temp_path):
-				os.remove(temp_path)
-
 	def _extract_text_with_pymupdf(self, pdf_bytes: bytes, title: str) -> str:
 		self._log(f"Extracting text with PyMuPDF: {title}")
 		doc = fitz.open(stream=pdf_bytes, filetype="pdf")
@@ -453,35 +404,16 @@ class DocumentProcessor:
 		}
 
 	def _extract_text_hybrid(self, pdf_bytes: bytes, title: str) -> tuple[str, str, Dict[str, float]]:
-		"""Prefer PyMuPDF (free), fallback to Gemini when quality is low or PyMuPDF fails."""
-		if self.extraction_mode == "gemini":
-			text = self._extract_text_with_gemini(pdf_bytes, title)
-			return text, "gemini", {"overall": 1.0}
-
+		"""Use PyMuPDF for text extraction (no Gemini dependency)."""
 		if self.extraction_mode == "pymupdf_only":
 			text = self._extract_text_with_pymupdf(pdf_bytes, title)
 			score = self._score_extraction_quality(text)
 			return text, "pymupdf", score
 
-		try:
-			pymupdf_text = self._extract_text_with_pymupdf(pdf_bytes, title)
-			pymupdf_score = self._score_extraction_quality(pymupdf_text)
-			self._log(
-				"PyMuPDF quality score "
-				f"{pymupdf_score['overall']:.2f} (threshold={self.pymupdf_threshold:.2f})"
-			)
-
-			if pymupdf_score["overall"] >= self.pymupdf_threshold:
-				self._log("Using PyMuPDF result.")
-				return pymupdf_text, "pymupdf", pymupdf_score
-
-			self._log("PyMuPDF quality below threshold, falling back to Gemini.")
-		except Exception as exc:
-			self._log(f"PyMuPDF failed ({exc}), falling back to Gemini.")
-
-		gemini_text = self._extract_text_with_gemini(pdf_bytes, title)
-		gemini_score = self._score_extraction_quality(gemini_text)
-		return gemini_text, "gemini", gemini_score
+		# Default to pygmupdf_only since Gemini is no longer supported
+		text = self._extract_text_with_pymupdf(pdf_bytes, title)
+		score = self._score_extraction_quality(text)
+		return text, "pymupdf", score
 
 	@staticmethod
 	def _normalize_text(raw_text: str) -> str:

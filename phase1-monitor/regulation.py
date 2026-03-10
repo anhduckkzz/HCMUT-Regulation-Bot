@@ -4,7 +4,8 @@ import os
 import re
 import tempfile
 import requests
-import google.generativeai as genai
+import fitz
+from mistralai import Mistral
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
@@ -21,10 +22,9 @@ load_dotenv()
 # CẤU HÌNH HỆ THỐNG
 # ==========================================
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
 STATE_FILE = os.getenv("STATE_FILE", "seen_laws.json")
-MAIN_MODEL_NAME = os.getenv("MAIN_MODEL", "gemini-3-flash-preview")
-FALLBACK_MODEL_NAME = os.getenv("FALLBACK_MODEL", "gemini-2.5-flash")
+MAIN_MODEL_NAME = os.getenv("MAIN_MODEL", "mistral-small-latest")
 SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT", "")
 HEADLESS_MODE = os.getenv("HEADLESS_MODE", "true").lower() == "true"
 WAIT_TIME = int(os.getenv("WAIT_TIME", "8"))
@@ -33,15 +33,13 @@ PDF_DOWNLOAD_TIMEOUT = int(os.getenv("PDF_DOWNLOAD_TIMEOUT", "60"))
 DISCORD_REQUEST_TIMEOUT = int(os.getenv("DISCORD_REQUEST_TIMEOUT", "15"))
 
 # Kiểm tra các biến bắt buộc
-if not DISCORD_WEBHOOK_URL or not GEMINI_API_KEY:
-    raise ValueError("Vui lòng cấu hình DISCORD_WEBHOOK_URL và GEMINI_API_KEY trong file .env")
+if not DISCORD_WEBHOOK_URL or not MISTRAL_API_KEY:
+    raise ValueError("Vui lòng cấu hình DISCORD_WEBHOOK_URL và MISTRAL_API_KEY trong file .env")
 
 # ==========================================
-# KHỞI TẠO AI MODELS (CONTEXT 1 TRIỆU TOKENS)
+# KHỞI TẠO AI MODELS
 # ==========================================
-genai.configure(api_key=GEMINI_API_KEY)
-main_model = genai.GenerativeModel(MAIN_MODEL_NAME)
-fallback_model = genai.GenerativeModel(FALLBACK_MODEL_NAME)
+client_llm = Mistral(api_key=MISTRAL_API_KEY)
 
 # ==========================================
 # QUẢN LÝ TRẠNG THÁI (TRÁNH GỬI THÔNG BÁO TRÙNG LẶP)
@@ -84,40 +82,38 @@ def download_full_pdf(drive_url):
         return None
 
 def process_and_summarize_pdf(pdf_bytes, title):
-    """ Upload PDF lên server Google, gọi LLM đọc toàn văn, sau đó dọn rác. """
-    print("   -> Đang đẩy tài liệu lên Gemini Server (Native PDF)...")
+    """ Extract PDF text with PyMuPDF, then summarize with Mistral AI. """
+    import fitz
     
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_file:
-        temp_file.write(pdf_bytes)
-        temp_path = temp_file.name
-
+    print("   -> Đang trích xuất text từ PDF với PyMuPDF...")
     try:
-        uploaded_doc = genai.upload_file(path=temp_path, mime_type="application/pdf")
+        pdf_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        pdf_text = "\n".join([page.get_text("text") for page in pdf_doc])
+        pdf_doc.close()
         
-        # Sử dụng system prompt từ .env hoặc mặc định
-        if SYSTEM_PROMPT:
-            instruction = f"{SYSTEM_PROMPT}\nTài liệu: \"{title}\"."
-        
-        print("   -> Đang chờ model suy luận và tóm tắt toàn văn (Có thể mất 10-30s)...")
-        try:
-            response = main_model.generate_content([instruction, uploaded_doc])
-            summary = response.text.strip()
-        except Exception as e_main:
-            print(f"      [Cảnh báo] Gemini 3 Flash lỗi: {e_main}. Đang kích hoạt Fallback 2.5...")
-            response = fallback_model.generate_content([instruction, uploaded_doc])
-            summary = response.text.strip()
-
-        # Xóa file trên server Google để tiết kiệm dung lượng
-        genai.delete_file(uploaded_doc.name)
-        return summary
-        
+        if not pdf_text or len(pdf_text) < 100:
+            return "⚠️ PDF không có nội dung hoặc trích xuất bị lỗi."
     except Exception as e:
-        print(f"   -> Lỗi khi xử lý qua API: {e}")
-        return "⚠️ Lỗi khi nhờ AI đọc file PDF."
+        print(f"   -> Lỗi khi trích xuất PDF: {e}")
+        return "⚠️ Lỗi khi trích xuất text từ PDF."
     
-    finally:
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
+    # Sử dụng system prompt từ .env hoặc mặc định
+    if SYSTEM_PROMPT:
+        instruction = f"{SYSTEM_PROMPT}\n\nTài liệu: \"{title}\"\n\nNội dung PDF:\n{pdf_text}"
+    else:
+        instruction = f"Hãy tóm tắt nội dung chính của tài liệu sau:\n\nTài liệu: \"{title}\"\n\nNội dung:\n{pdf_text}"
+    
+    print("   -> Đang gọi Mistral AI để tóm tắt (Có thể mất 10-30s)...")
+    try:
+        response = client_llm.chat.complete(
+            model=MAIN_MODEL_NAME,
+            messages=[{"role": "user", "content": instruction}]
+        )
+        summary = response.choices[0].message.content.strip()
+        return summary
+    except Exception as e:
+        print(f"   -> Lỗi khi gọi Mistral AI: {e}")
+        return "⚠️ Lỗi khi nhờ AI tóm tắt file PDF."
 
 # ==========================================
 # DISCORD EMBED ALERTS (MÀU XANH BÁCH KHOA)
