@@ -18,6 +18,7 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from webdriver_manager.chrome import ChromeDriverManager
 
+from cache_config import CacheConfig
 
 load_dotenv()
 
@@ -48,7 +49,7 @@ class ProcessedDocument:
 class DocumentProcessor:
 	"""Crawl regulation PDFs, preprocess content, and output vector-ready records."""
 
-	def __init__(self) -> None:
+	def __init__(self, cache_file: Optional[str] = None, cache_dir: Optional[str] = None) -> None:
 		self.regulation_url = os.getenv(
 			"REGULATION_PAGE_URL", "https://hcmut.edu.vn/dao-tao/quy-che-quy-dinh"
 		)
@@ -60,10 +61,11 @@ class DocumentProcessor:
 			"PROCESSOR_STATE_FILE",
 			os.path.join(os.path.dirname(__file__), "processor_seen_laws.json"),
 		)
-		self.cache_file = os.getenv(
-			"PROCESSOR_CACHE_FILE",
-			os.path.join(os.path.dirname(__file__), ".local_cache", "processed_records.jsonl"),
-		)
+		
+		# Initialize cache configuration with optional overrides
+		self.cache_config = CacheConfig(cache_dir=cache_dir, crawled_cache_file=cache_file)
+		self.cache_file = self.cache_config.crawled_cache_file
+		
 		self.cache_enabled = os.getenv("PROCESSOR_CACHE_ENABLED", "true").lower() == "true"
 
 		self.chunk_size = int(os.getenv("CHUNK_SIZE", "1200"))
@@ -95,7 +97,7 @@ class DocumentProcessor:
 			self.fallback_model = genai.GenerativeModel(self.fallback_model_name)
 
 		if self.cache_enabled:
-			os.makedirs(os.path.dirname(self.cache_file), exist_ok=True)
+			self.cache_config.ensure_directories_exist()
 
 	def _log(self, message: str) -> None:
 		if self.verbose_logs:
@@ -638,9 +640,18 @@ class DocumentProcessor:
 def process_documents_for_vector_store(
 	only_new: bool = True,
 	max_documents: Optional[int] = None,
+	cache_file: Optional[str] = None,
+	cache_dir: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-	"""Fetch vector-ready records with local cache to survive interrupted runs."""
-	processor = DocumentProcessor()
+	"""Fetch vector-ready records with local cache to survive interrupted runs.
+	
+	Args:
+		only_new: Only process new (uncrawled) regulations
+		max_documents: Optional limit on number of documents to process
+		cache_file: Optional path to crawled cache file
+		cache_dir: Optional base cache directory
+	"""
+	processor = DocumentProcessor(cache_file=cache_file, cache_dir=cache_dir)
 
 	regulations = processor.crawl_regulations()
 	targets = processor.get_new_regulations(regulations) if only_new else regulations
@@ -693,6 +704,22 @@ def process_documents_for_vector_store(
 
 def _run_cache_maintenance_command() -> None:
 	parser = argparse.ArgumentParser(description="Document processor local cache maintenance")
+	
+	# Cache location arguments
+	parser.add_argument(
+		"--cache-dir",
+		type=str,
+		default=None,
+		help="Base cache directory (env: CACHE_DIR, default: ../cache/)",
+	)
+	parser.add_argument(
+		"--cache-file",
+		type=str,
+		default=None,
+		help="Path to crawled cache file (env: CRAWLED_CACHE_FILE, default: <cache-dir>/processed_records.jsonl)",
+	)
+	
+	# Cache maintenance commands
 	parser.add_argument("--cache-stats", action="store_true", help="Show cache file stats")
 	parser.add_argument("--clear-cache", action="store_true", help="Delete local cache file")
 	parser.add_argument("--dedupe-cache", action="store_true", help="Dedupe local cache by source URL")
@@ -709,7 +736,9 @@ def _run_cache_maintenance_command() -> None:
 	)
 	args = parser.parse_args()
 
-	processor = DocumentProcessor()
+	processor = DocumentProcessor(cache_file=args.cache_file, cache_dir=args.cache_dir)
+	print(f"[INFO] Using cache configuration: {processor.cache_config}")
+	
 	if args.clear_cache:
 		processor.clear_cache()
 		print("Cache cleared.")

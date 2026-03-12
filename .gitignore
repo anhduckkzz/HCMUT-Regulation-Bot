@@ -8,6 +8,9 @@ phase2-chatbot/processor_seen_laws.json
 # Vector database
 database/
 
+# Local cache
+phase2-chatbot/cache/
+
 # Python cache
 __pycache__/
 *.py[cod]

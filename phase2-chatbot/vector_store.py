@@ -7,6 +7,7 @@ import google.generativeai as genai
 from dotenv import load_dotenv
 
 from document_processor import DocumentProcessor, process_documents_for_vector_store
+from cache_config import CacheConfig
 
 
 load_dotenv()
@@ -15,24 +16,41 @@ load_dotenv()
 class VectorStoreManager:
 	"""Embed processed regulation chunks and persist them in ChromaDB."""
 
-	def __init__(self) -> None:
+	def __init__(
+		self,
+		vector_db_path: Optional[str] = None,
+		cache_dir: Optional[str] = None,
+		crawled_cache_file: Optional[str] = None,
+	) -> None:
+		"""Initialize Vector Store Manager with optional cache overrides.
+		
+		Args:
+			vector_db_path: Optional path to ChromaDB storage (env: VECTOR_DB_PATH)
+			cache_dir: Optional base cache directory (env: CACHE_DIR)
+			crawled_cache_file: Optional path to crawled cache file (env: CRAWLED_CACHE_FILE)
+		"""
 		self.gemini_api_key = os.getenv("GEMINI_API_KEY")
 		if not self.gemini_api_key:
 			raise ValueError("Missing GEMINI_API_KEY in .env")
 
 		genai.configure(api_key=self.gemini_api_key)
 
-		self.embedding_model = os.getenv("EMBEDDING_MODEL", "gemini-embedding-001")
+		self.embedding_model = os.getenv("EMBEDDING_MODEL", "models/gemini-embedding-001")
 		self.embedding_task_type = os.getenv("EMBEDDING_TASK_TYPE", "retrieval_document")
 		self.embedding_retry_count = int(os.getenv("EMBEDDING_RETRY_COUNT", "3"))
 		self.embedding_retry_delay = float(os.getenv("EMBEDDING_RETRY_DELAY", "1.5"))
 		self.verbose_logs = os.getenv("VERBOSE_LOGS", "true").lower() == "true"
 
-		self.persist_directory = os.getenv(
-			"VECTOR_DB_PATH",
-			os.path.join(os.path.dirname(__file__), "..", "database", "vectors"),
+		# Initialize cache configuration
+		self.cache_config = CacheConfig(
+			cache_dir=cache_dir,
+			crawled_cache_file=crawled_cache_file,
+			vector_db_path=vector_db_path,
 		)
-		self.collection_name = os.getenv("VECTOR_COLLECTION_NAME", "hcmut_regulations")
+		self.cache_config.ensure_directories_exist()
+		
+		self.persist_directory = self.cache_config.vector_db_path
+		self.collection_name = self.cache_config.collection_name
 		self.upsert_batch_size = int(os.getenv("UPSERT_BATCH_SIZE", "32"))
 
 		self.client = chromadb.PersistentClient(path=self.persist_directory)
@@ -154,6 +172,8 @@ class VectorStoreManager:
 		records = process_documents_for_vector_store(
 			only_new=only_new,
 			max_documents=max_documents,
+			cache_file=self.cache_config.crawled_cache_file,
+			cache_dir=self.cache_config.cache_dir,
 		)
 		self._log(f"Fetched {len(records)} records from document processor.")
 		upserted = self.ingest_processed_records(records)
@@ -166,7 +186,10 @@ class VectorStoreManager:
 
 	def ingest_from_cache_only(self, max_documents: Optional[int] = None) -> Dict[str, int]:
 		"""Index only from local cache without crawling latest documents."""
-		processor = DocumentProcessor()
+		processor = DocumentProcessor(
+			cache_file=self.cache_config.crawled_cache_file,
+			cache_dir=self.cache_config.cache_dir,
+		)
 		records = processor.get_cached_records_for_indexing(limit_sources=max_documents)
 		self._log(
 			f"Cache-only mode: fetched {len(records)} records from local cache (no crawling)."
@@ -183,14 +206,51 @@ class VectorStoreManager:
 def ingest_documents_to_chromadb(
 	only_new: bool = True,
 	max_documents: Optional[int] = None,
+	vector_db_path: Optional[str] = None,
+	cache_dir: Optional[str] = None,
+	crawled_cache_file: Optional[str] = None,
 ) -> Dict[str, int]:
-	"""Convenience function for one-shot ingestion into ChromaDB."""
-	store = VectorStoreManager()
+	"""Convenience function for one-shot ingestion into ChromaDB.
+	
+	Args:
+		only_new: Only ingest new documents
+		max_documents: Optional limit on documents to process
+		vector_db_path: Optional custom vector DB path
+		cache_dir: Optional custom cache directory
+		crawled_cache_file: Optional custom crawled cache file path
+	"""
+	store = VectorStoreManager(
+		vector_db_path=vector_db_path,
+		cache_dir=cache_dir,
+		crawled_cache_file=crawled_cache_file,
+	)
 	return store.ingest_from_document_processor(only_new=only_new, max_documents=max_documents)
 
 
 def _run_cli() -> None:
 	parser = argparse.ArgumentParser(description="Vector store ingestion and cache maintenance")
+	
+	# Cache location arguments
+	parser.add_argument(
+		"--cache-dir",
+		type=str,
+		default=None,
+		help="Base cache directory (env: CACHE_DIR, default: ../cache/)",
+	)
+	parser.add_argument(
+		"--crawled-cache-file",
+		type=str,
+		default=None,
+		help="Path to crawled cache file (env: CRAWLED_CACHE_FILE, default: <cache-dir>/processed_records.jsonl)",
+	)
+	parser.add_argument(
+		"--vector-db-path",
+		type=str,
+		default=None,
+		help="Path to vector DB (env: VECTOR_DB_PATH, default: ../database/vectors/)",
+	)
+	
+	# Ingestion mode arguments
 	parser.add_argument("--only-new", action="store_true", help="Ingest only new regulations")
 	parser.add_argument(
 		"--index-from-cache-only",
@@ -204,6 +264,7 @@ def _run_cli() -> None:
 		help="Optional max number of source documents to process",
 	)
 
+	# Cache maintenance arguments
 	parser.add_argument("--cache-stats", action="store_true", help="Show document cache stats")
 	parser.add_argument("--clear-cache", action="store_true", help="Clear document cache file")
 	parser.add_argument("--dedupe-cache", action="store_true", help="Dedupe document cache entries")
@@ -231,7 +292,12 @@ def _run_cli() -> None:
 	)
 
 	if cache_command:
-		processor = DocumentProcessor()
+		processor = DocumentProcessor(
+			cache_file=args.crawled_cache_file,
+			cache_dir=args.cache_dir,
+		)
+		print(f"[INFO] Using cache configuration: {processor.cache_config}")
+		
 		if args.clear_cache:
 			processor.clear_cache()
 			print("Cache cleared.")
@@ -254,12 +320,19 @@ def _run_cli() -> None:
 			return
 
 	if args.index_from_cache_only:
-		store = VectorStoreManager()
+		store = VectorStoreManager(
+			vector_db_path=args.vector_db_path,
+			cache_dir=args.cache_dir,
+			crawled_cache_file=args.crawled_cache_file,
+		)
 		result = store.ingest_from_cache_only(max_documents=args.max_documents)
 	else:
 		result = ingest_documents_to_chromadb(
 			only_new=args.only_new,
 			max_documents=args.max_documents,
+			vector_db_path=args.vector_db_path,
+			cache_dir=args.cache_dir,
+			crawled_cache_file=args.crawled_cache_file,
 		)
 	print("Vector ingestion completed")
 	print(f"Records fetched: {result['records_fetched']}")
