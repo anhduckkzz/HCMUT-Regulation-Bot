@@ -60,9 +60,6 @@ chromedriver
 *.tmp
 temp/
 
-# Local processing cache (phase2)
-phase2-chatbot/.local_cache/
-
 # OS generated files
 .DS_Store
 Thumbs.db
