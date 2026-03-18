@@ -2,7 +2,14 @@
 .env
 
 # File trạng thái
-seen_laws.json
+phase1-monitor/seen_laws.json
+phase2-chatbot/processor_seen_laws.json
+
+# Vector database
+database/
+
+# Local cache
+phase2-chatbot/cache/
 
 # Python cache
 __pycache__/
