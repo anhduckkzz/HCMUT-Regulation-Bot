@@ -31,15 +31,11 @@ logger = logging.getLogger(__name__)
 class LocalMilvusConnection:
     """Helper class to connect to local Milvus instance."""
 
-    def __init__(self, milvus_host: str = "localhost", milvus_port: int = 19530):
+    def __init__(self):
         """Initialize local Milvus connection.
-        
-        Args:
-            milvus_host: Local Milvus host (default: localhost)
-            milvus_port: Local Milvus port (default: 19530)
         """
-        self.milvus_host = os.getenv("MILVUS_HOST", milvus_host)
-        self.milvus_port = int(os.getenv("MILVUS_PORT", milvus_port))
+        self.milvus_host = os.getenv("MILVUS_HOST", "localhost")
+        self.milvus_port = int(os.getenv("MILVUS_PORT", "19530"))
         self.collection_name = "hcmut_regulations"
 
     def connect(self) -> Collection:
@@ -96,9 +92,6 @@ class ZillizCloudVectorStore:
         zilliz_endpoint: Optional[str] = None,
         zilliz_api_key: Optional[str] = None,
         collection_name: Optional[str] = None,
-        vector_db_path: Optional[str] = None,
-        cache_dir: Optional[str] = None,
-        crawled_cache_file: Optional[str] = None,
     ) -> None:
         """Initialize Zilliz Cloud Vector Store.
 
@@ -106,9 +99,6 @@ class ZillizCloudVectorStore:
             zilliz_endpoint: Zilliz Cloud public endpoint (env: ZILLIZ_CLOUD_ENDPOINT)
             zilliz_api_key: Zilliz Cloud API key (env: ZILLIZ_CLOUD_API_KEY)
             collection_name: Collection name (env: ZILLIZ_COLLECTION_NAME, default: hcmut_regulations)
-            vector_db_path: Optional path to vector DB cache (env: VECTOR_DB_PATH)
-            cache_dir: Optional base cache directory (env: CACHE_DIR)
-            crawled_cache_file: Optional path to crawled cache file (env: CRAWLED_CACHE_FILE)
         """
         # Get Zilliz Cloud configuration from environment
         self.zilliz_endpoint = zilliz_endpoint or os.getenv("ZILLIZ_CLOUD_ENDPOINT")
@@ -144,11 +134,7 @@ class ZillizCloudVectorStore:
         )
 
         # Initialize cache configuration
-        self.cache_config = CacheConfig(
-            cache_dir=cache_dir,
-            crawled_cache_file=crawled_cache_file,
-            vector_db_path=vector_db_path,
-        )
+        self.cache_config = CacheConfig()
         self.cache_config.ensure_directories_exist()
 
         self.upsert_batch_size = int(os.getenv("UPSERT_BATCH_SIZE", "32"))
@@ -355,10 +341,7 @@ class ZillizCloudVectorStore:
 
         # Get processed documents
         try:
-            records = process_documents_for_vector_store(
-                cache_dir=self.cache_config.cache_dir,
-                cache_file=self.cache_config.crawled_cache_file,
-            )
+            records = process_documents_for_vector_store()
             self._log(f"📄 Loaded {len(records)} records from cache")
         except Exception as e:
             self._log(f"❌ Error loading documents: {e}")

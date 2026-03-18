@@ -49,7 +49,7 @@ class ProcessedDocument:
 class DocumentProcessor:
 	"""Crawl regulation PDFs, preprocess content, and output vector-ready records."""
 
-	def __init__(self, cache_file: Optional[str] = None, cache_dir: Optional[str] = None) -> None:
+	def __init__(self) -> None:
 		self.regulation_url = os.getenv(
 			"REGULATION_PAGE_URL", "https://hcmut.edu.vn/dao-tao/quy-che-quy-dinh"
 		)
@@ -62,8 +62,8 @@ class DocumentProcessor:
 			os.path.join(os.path.dirname(__file__), "processor_seen_laws.json"),
 		)
 		
-		# Initialize cache configuration with optional overrides
-		self.cache_config = CacheConfig(cache_dir=cache_dir, crawled_cache_file=cache_file)
+		# Initialize cache configuration from environment variables.
+		self.cache_config = CacheConfig()
 		self.cache_file = self.cache_config.crawled_cache_file
 		
 		self.cache_enabled = os.getenv("PROCESSOR_CACHE_ENABLED", "true").lower() == "true"
@@ -640,18 +640,14 @@ class DocumentProcessor:
 def process_documents_for_vector_store(
 	only_new: bool = True,
 	max_documents: Optional[int] = None,
-	cache_file: Optional[str] = None,
-	cache_dir: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
 	"""Fetch vector-ready records with local cache to survive interrupted runs.
 	
 	Args:
 		only_new: Only process new (uncrawled) regulations
 		max_documents: Optional limit on number of documents to process
-		cache_file: Optional path to crawled cache file
-		cache_dir: Optional base cache directory
 	"""
-	processor = DocumentProcessor(cache_file=cache_file, cache_dir=cache_dir)
+	processor = DocumentProcessor()
 
 	regulations = processor.crawl_regulations()
 	targets = processor.get_new_regulations(regulations) if only_new else regulations
@@ -705,20 +701,6 @@ def process_documents_for_vector_store(
 def _run_cache_maintenance_command() -> None:
 	parser = argparse.ArgumentParser(description="Document processor local cache maintenance")
 	
-	# Cache location arguments
-	parser.add_argument(
-		"--cache-dir",
-		type=str,
-		default=None,
-		help="Base cache directory (env: CACHE_DIR, default: ../cache/)",
-	)
-	parser.add_argument(
-		"--cache-file",
-		type=str,
-		default=None,
-		help="Path to crawled cache file (env: CRAWLED_CACHE_FILE, default: <cache-dir>/processed_records.jsonl)",
-	)
-	
 	# Cache maintenance commands
 	parser.add_argument("--cache-stats", action="store_true", help="Show cache file stats")
 	parser.add_argument("--clear-cache", action="store_true", help="Delete local cache file")
@@ -736,7 +718,7 @@ def _run_cache_maintenance_command() -> None:
 	)
 	args = parser.parse_args()
 
-	processor = DocumentProcessor(cache_file=args.cache_file, cache_dir=args.cache_dir)
+	processor = DocumentProcessor()
 	print(f"[INFO] Using cache configuration: {processor.cache_config}")
 	
 	if args.clear_cache:

@@ -2,11 +2,8 @@ import google.generativeai as genai
 import os
 import argparse
 import time
-from typing import Optional
 from dotenv import load_dotenv
 from pymilvus import Collection, connections
-
-from cache_config import CacheConfig
 
 # 1. Cấu hình môi trường (Shared config)
 load_dotenv()
@@ -14,23 +11,16 @@ genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
 
 class RAGEngine:
-    def __init__(self, enable_delay: bool = False, vector_db_path: Optional[str] = None, milvus_host: str = "localhost", milvus_port: int = 19530):
+    def __init__(self, enable_delay: bool = False):
         """Initialize RAG Engine.
         
         Args:
             enable_delay: Enable 20-second delay on quota limit
-            vector_db_path: Optional path to vector DB (env: VECTOR_DB_PATH) - used by cache config
-            milvus_host: Milvus server host (env: MILVUS_HOST, default: localhost)
-            milvus_port: Milvus server port (env: MILVUS_PORT, default: 19530)
         """
         
-        # Initialize cache configuration
-        cache_config = CacheConfig(vector_db_path=vector_db_path)
-        cache_config.ensure_directories_exist()
-        
         # Get Milvus connection parameters from environment
-        self.milvus_host = os.getenv("MILVUS_HOST", milvus_host)
-        self.milvus_port = int(os.getenv("MILVUS_PORT", milvus_port))
+        self.milvus_host = os.getenv("MILVUS_HOST", "localhost")
+        self.milvus_port = int(os.getenv("MILVUS_PORT", "19530"))
         self.collection_name = os.getenv("MILVUS_COLLECTION_NAME", "hcmut_regulations")
         
         # Connect to Milvus
@@ -75,7 +65,7 @@ class RAGEngine:
                 else:
                     raise
 
-    def retrieve(self, query_text, n_results=3):
+    def retrieve(self, query_text):
         """Bước R (Retrieval) - using Milvus"""
         query_vector = self._get_embedding(query_text)
         
@@ -96,7 +86,7 @@ class RAGEngine:
             output_fields=["id", "text", "source_url", "doc_title"],
         )
 
-        # Convert Milvus results to ChromaDB-like format for compatibility
+        # Normalize Milvus results to the internal response structure.
         formatted_results = {
             "documents": [[]],
             "metadatas": [[]],
@@ -190,24 +180,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="RAG Engine for HCMUT Regulations (using Milvus)")
     parser.add_argument("--delay", action="store_true", help="Enable 20-second delay on quota limit")
     parser.add_argument(
-        "--vector-db-path",
-        type=str,
-        default=None,
-        help="Path to vector DB (env: VECTOR_DB_PATH, default: ../database/vectors/)",
-    )
-    parser.add_argument(
-        "--milvus-host",
-        type=str,
-        default="localhost",
-        help="Milvus server host (env: MILVUS_HOST, default: localhost)",
-    )
-    parser.add_argument(
-        "--milvus-port",
-        type=int,
-        default=19530,
-        help="Milvus server port (env: MILVUS_PORT, default: 19530)",
-    )
-    parser.add_argument(
         "--experiment",
         action="store_true",
         help="Experiment mode: print augmented prompt without API call (no quota usage)",
@@ -222,12 +194,7 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
     
-    engine = RAGEngine(
-        enable_delay=args.delay,
-        vector_db_path=args.vector_db_path,
-        milvus_host=args.milvus_host,
-        milvus_port=args.milvus_port,
-    )
+    engine = RAGEngine(enable_delay=args.delay)
     
     query = input("Nhập câu hỏi của bạn về quy chế học vụ HCMUT: ")
     
